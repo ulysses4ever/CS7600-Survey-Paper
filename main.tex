@@ -1,0 +1,79 @@
+\documentclass[11pt]{extarticle}
+\usepackage[utf8]{inputenc}
+\usepackage{xcolor}
+\usepackage{xspace}
+
+\newcommand{\fix}{[{\color{red}\bf FIX!}]\xspace}
+
+\title{CS7600: Survey Paper\\Lazy Functional Programming on Multiprocessor}
+\author{Artem Pelenitsyn}
+\date{November 2018}
+
+\usepackage{fullpage}
+
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+Purely functional programming should be an ideal target for parallelization… in theory. A little number of actual implementations have made it into wide use. Haskell and its most popular compiler, GHC, is one of such developments. The papers under consideration tell the story of Haskell going to the multiprocessor.
+\end{abstract}
+
+
+\nocite{*}
+\bibliographystyle{unsrt}
+\bibliography{references}
+
+\section{Introduction}
+
+\fix [More basic information]
+
+Functional programming (sometimes called Purely Functional Programming) assumes \fix (wrong word; this is definition, really) the absence of mutable state. The assumption suggests especially attractive area for parallel and concurrent programming (called parallel below, for short). The Haskell programming language and its major implementation, the GHC compiler, embodies an attempt to utilize this idea.
+
+Lazy functional programming objectifies a notion of yet-to-be-performed computation, called \emph{thunk} in certain languages like Haskell. Thunks are used to store function applications whose results have not been retrieved so far. A little reflection on this notion quickly jumps to the conclusion that a thunk is not so much different from a \emph{spark} (also known as \emph{future} or \emph{promise})~--- a computation that is scheduled for an asynchronous execution and can be forced at a later moment in the program.
+
+Being rather cheap at the surface language level, parallel functional programming poses interesting challenges in the field of systems and language implementation. First, a binding associated with a thunk may be retrieved from different threads. This requires special care from the side of scheduler. Second, a reasonable garbage collection strategy should take advantage of multiple capabilities dealing with the heap in a clustered manner. Third, naive approach to sparking threads could lead to severe problems with the granularity of parallelism. The \fix problem should be addressed of by a dedicated load balancing logic in the run-time.
+
+Research work addresses the challenges differently depending on the type of hardware architectures it has in mind as a backend.
+
+PLDI'96 paper~\cite{Trinder96} \fix (paper shouldn't be the subject) presents a pioneering implementation of parallel lazy functional programming model. It was meant to be hardware-agnostic but used message passing and distributed memory interface of PVM as a back-end. The paper put a limited effort into benchmarking the implementation, taking divide-and-conquer factorial algorithm as its case study.
+
+Haskell Workshop'05 paper~\cite{Harris05} declares the upcoming era of shared-memory symmetric multiprocessors. Consequently, it investigates the design space outlined by PLDI'96 paper in a different direction. Its main contribution is a lock-free thunk evaluation algorithm for the shared heap. The evaluation section is more substantial than PLDI'96's one. The paper reports on positive results when experimenting with the sequential \texttt{nofib} test suite and parallel GHC driver.
+
+ICFP'09 paper~\cite{Marlow09} admits that the performance of parallel Haskell programs is inconsistent. It revisits a number of design decisions adopted before and goes in a great detail as to making them perform better. The main topics for speeding up the parallel processing are: faster sparks creation and dispatch, better space utilization by the sparks, parallel GC, load balancing. The paper assesses the performance using a representative set of parallel programs (for the first time in this body of work).
+
+In this survey paper, we review the main concepts introduced in the aforementioned papers and see what performance results they achieve eventually.
+
+\section{Message-Passing as a Basis for Parallel Functional Programming}
+
+The basic framework for implementation of functional parallel programming was laid out by~\cite{Trinder96}. It describes the execution model as a network of virtual processor elements (PE) communicating via message-passing, asynchronously. Each PE has a pool of runnable threads which it schedules in FIFO order, non-preemptively. The scheduling scheme allows context switches only when a thread blocks, finishes or run out of memory. A thread can be created from any spark if the corresponding thunk has not been computed already. 
+
+The parallelism in a system stems from programmer-given annotations and, therefore, explicit. The annotation signals that the PE executing the program will put the annotated thunk in its spark queue. When the PE has nothing else to do, it attempts to schedule next spark in the queue. If the queue is empty, the PE can inquire about sparks available on other PEs via messaging.
+
+A notable challenge arising from the algorithm is that one thunk can be entered by different threads. The solution to this problem is so called \emph{backholing}. When a thread enters a thunk, it updates it to the black hole. Any other thread entering this black hole will be blocked and attached to the queue of threads waiting on this black hole. When the first thread finishes executing the thunk, it updates the value of the thunk and moves all waiting threads to the runnable queue managed by the current PE.
+
+Memory management is based on PE-local GC-managed heaps. This approach facilitates local garbage collection and keeps its cost low. Some memory address bookkeeping is necessary to allow for thunks travelling between PEs. In a nutshell, every object can have two kinds of addresses, a local and a global one. A local address is only visible to the PE holding the object. A global address is used by other PEs to lookup the object. A global address consists of a name of the owning PE and a local identifier. Note that for local garbage collection to be transparent from outside, local identifier should not be exactly the local address because the latter may change after GC. Instead, there is a PE-local table mapping local identifiers to local addresses. Also, to track which local objects have been globalized, and to cache objects, some additional tables are built. Finally, moving individual objects between nodes is vastly inefficient. Therefore, the runtime tries to pack reasonably many ``nearby'' objects to the one in move.
+
+\section{Lock-Free Thunk Evaluation}
+
+Fully synchronized evaluation of thunks as discussed in Section 2 has its cost which becomes more significant when measured on a single multiprocessor. SMP processors had become ubiquitous during the 2000s, so the blackholing approach to synchronization had to be reconsidered.
+
+We consider a thunk as a dynamic data structure representing a pure functional term. Evaluating such structure should not have side effects visible in the program, but the data structure itself is updated during evaluation, namely, the computed value replaces the code used to compute this value.
+
+What happens if two threads start evaluating the same thunk? In the absence of side effects in the language, the result of both evaluations should be the same. So, maybe it is not that bad to allow work duplication? The problem of synchronization still persists, though, because both treads are going to try to update the thunk with the result of evaluation. Then, without additional arrangements, the threads would enter a race condition. Therefore, some amount of synchronization is needed even in the lock-free approach.
+
+Concurrent evaluation of the same thunk wastes computational resources. Is this waste crucial? Most of the thunks are cheap and the likelihood of concurrent evaluation is low. Nevertheless, we would like to have a guarantee that two threads do not commit into the same expensive computation. The mechanism providing the guarantee is based on blackholing (again). 
+
+In more detail, every thread, when start executing a thunk, places an update frame on its own stack. The update frame refers to the thunk under evaluation and holds the code which performs actual updating of the thunk with a computed value. If the evaluation takes ``too long'' (meaning: after some timeout), a thread switches from thunk evaluation to a search for update frames on its stack and tries to claim them. The claiming is implemented with \textit{compare-and-swap} instruction. Upon successful claiming, the thunk gets balckholed, and no other thread can ever start evaluating the thunk.
+
+When we talk about absence of side effects, we actually mean that compiler statically knows what parts of the program can produce side effects and forbids scheduling them for asynchronous execution accordingly. The knowledge comes from the type system. Invalidating this assumption, the GHC compiler supports \texttt{unsafePerformIO} primitive which allows a side effecting operation to escape the type check. In order to make such escape safe under concurrent evaluation, it was proposed to add one more primitive in the language. The primitive \texttt{justOnce} with a trivial function type \texttt{a -> a} would not have any operational content, but only mark the computations which should be executed not more than once. The programmer should use the marker when they know about hidden side effects inside a seemingly pure computation.
+
+\section{Memory Management}
+
+\section{Other Techniques}
+
+\section{Measurements}
+
+\section{Conclusion}
+
+\end{document}
