@@ -7,7 +7,7 @@
 
 \title{CS7600: Survey Paper\\Lazy Functional Programming on the Multiprocessor}
 \author{Artem Pelenitsyn}
-\date{November 2018}
+\date{December 2018}
 
 \usepackage{fullpage}
 
@@ -16,54 +16,50 @@
 \maketitle
 
 \begin{abstract}
-Purely functional programming should be an ideal target for parallelization… in theory. A little number of actual implementations have made it into wide use. Haskell and its most popular compiler, GHC, is one of such developments. The papers under consideration tell the story of Haskell going to the multiprocessor.
+Lazy functional programming seems to be an ideal target for execution on parallel architectures. The inherent parallelism of the paradigm is hard to utilize in practical implementations, though. Many design choices in the areas such as thunk distribution, thunk evaluation and a garbage collection technique, have to be carefully crafted into efficient runtime. Precise and extensive measurements are essential to show improved performance but require considerable effort in creating parallel benchmarking programs and getting the programs run on a variety of architectures.
 \end{abstract}
 
 
 \section{Introduction}
 
-A prominent family of modern programming languages is that of functional programming languages. In such languages, the main tool for organizing code is a notion of a pure function. This kind of function always produce the same result given the same input. Pure functions, therefore, do not use a mutable state or side-effecting operations. These features suggest an especially attractive area for parallel and concurrent programming (called \textit{parallel} below, for short).
+A prominent family of modern programming languages is that of functional programming languages. In such languages, the main tool for organizing code is a notion of a pure function. This kind of function always produces the same result given the same input. Pure functions, therefore, do not use a mutable state or side-effecting operations. This observation suggests an especially attractive area for parallel and concurrent programming (called \textit{parallel} below, for short).
 
-%{\bf Introduce concept of lazy functional languages}
-Further, lazy functional programming objectifies a notion of yet-to-be-performed computation, called \emph{thunk} in certain languages (such as Haskell, as we will see). Thunks store function applications that have results not retrieved so far. A little reflection on this notion quickly jumps to the conclusion that a thunk is not so much different from a \emph{spark} (also known as a future or promise)~--- a computation that is scheduled for an asynchronous execution and that could be forced at a later moment in the program.
+Further, \emph{lazy} functional programming objectifies a notion of yet-to-be-performed computation, called \emph{thunk} in certain languages (such as Haskell, as we will see). Thunks store function applications not retrieved so far. A little reflection on this notion quickly jumps to the conclusion that a thunk is not so much different from a \emph{spark} (also known as a future or promise)~--- a computation that is scheduled for an asynchronous execution and that could be forced at a later moment in the program.
 
 Unfortunately, the past performance of functional languages has not always been up to the requirements of industry.
-Modern functional programming language research is now targeting both research and industrial applications.
+To keep up, modern functional programming language research is now targeting both research and industrial applications.
+In particular, 
+parallel implementations are important today in order to reach the highest levels of performance. 
 
-From early on, the developers of the major Haskell implementation, the GHC compiler, tried to utilize the idea of parallel functional programming.
-Parallel implementations are important today in order to reach the highest levels of performance. 
-
-Parallel functional programming poses interesting challenges in the field of systems and language implementation.
-First, design decisions have to keep in mind particular hardware architectures which the compiler targets (Section 2).
-Second, a binding associated with a thunk may be retrieved from different threads. Concurrent thunk access requires special care from the side of the scheduler (Section 3). Third, a reasonable garbage collection strategy should take advantage of multiple capabilities dealing with the heap in a clustered manner (Section 4).
-%Fourth, a naive approach to sparking threads could lead to severe problems with the granularity of parallelism. %The issue should be addressed by a dedicated load balancing logic in the run-time (Section 5).
+Parallel functional programming poses interesting challenges in the fields of systems and language implementation. In this paper, we look into some solutions as found in the GHC compiler, the major implementation of the lazy functional programming language Haskell. 
+First, design decisions have to keep in mind particular hardware architectures which the compiler targets (Section~2).
+Second, the binding associated with a thunk may be retrieved from different threads, i.e. concurrently. Concurrent thunk access requires special care from the side of the scheduler (Section~3). Third, a reasonable garbage collection strategy should take advantage of multiple capabilities dealing with the heap in a clustered manner (Section 4). Fourth, precise and extensive measurements are needed to show improved performance but require considerable effort in creating parallel benchmarking programs and getting the programs run on a variety of architectures (Section 5).
 
 \section{Programming Model and Target Architectures}
 \label{sec:model}
 
-% Polish this paragraph later
 A lazy, functional, parallel programming language must specify both a programming model and how it will be applied to the target architectures.
-Any parallel target architecture must introduce the concept of a processing element (PE). A programming language should supply a way to utilize PEs for a programmer.
-Programmer-provided annotations on bindings are a way to achieve parallelism in a lazy functional language. The annotation signals that the PE executing the program will put the annotated thunk in its spark queue. The queue will be used to spread the job between all PEs later on, when the PE will interrupt from executing the program.
+Any parallel target architecture must introduce the concept of a processing element (PE). A programming language, then, should allow a programmer to utilize PEs.
+One way for this is programmer-provided annotations on lazy bindings. The annotation signals that the PE executing the program will put the annotated thunk, called spark, in its spark queue. The queue will be used to spread the job between all PEs later on, when the PE will interrupt from executing the program.
 
-This approach to parallel computations is sometimes called semi-explicit because, although code has to be modified to run in parallel, modifications are rather small, straight-forward and do not require explicit management of threads.
+The annotation-based approach to parallel computations is sometimes called semi-explicit because, although code has to be modified to run in parallel, modifications are rather small, straight-forward and do not require explicit management of threads.
 
-The basic framework for implementing parallel functional programming was laid out by~\cite{Trinder96}. The execution model there forms a network of virtual processing elements communicating via message-passing, asynchronously. Each PE has its own spark queue that it schedules for execution in separate threads, in FIFO order, non-preemptively. The scheduling scheme allows context switches only when a thread blocks, finishes or run out of memory. When PE finishes, it attempts to schedule the next spark in the queue. If the queue is empty, the PE can inquire about sparks available on other PEs via messaging.
+The basic framework for implementing parallel functional programming was laid out by~\cite{Trinder96}. The execution model there forms a network of virtual processing elements communicating via message-passing, asynchronously. Each PE has its own spark queue that it schedules for execution in FIFO order, non-preemptively. The scheduling scheme allows context switches only when a PE blocks, finishes or runs out of memory. When a PE finishes, it attempts to schedule the next spark in the queue. If the queue is empty, the PE can inquire about sparks available on other PEs via messaging.
 
-The most flexible and most accessible architecture in the 90s was that of the cluster. Naturally, a pioneering implementation of the parallel lazy functional programming model~\cite{Trinder96} used message passing and distributed memory interface of PVM as a back-end. Middleware, such as PVM or MPI, hides many challenges in implementation of parallel programming model behind a high-level interface. Also, a messaging system is scheduled preemptively by an operating system and, therefore, allows the runtime system of a parallel language to go with a simplified non-preemptive approach.
+The most flexible and most accessible architecture in the 90s was that of a cluster. Naturally, a pioneering implementation of the parallel lazy functional programming model~\cite{Trinder96} used message passing and distributed memory interface of PVM as a back-end. Middleware, such as PVM or MPI, hides many challenges in implementation of parallel programming model behind a high-level interface. Also, a messaging system is scheduled preemptively by an operating system and, therefore, allows the runtime system of a parallel language to go with a simplified non-preemptive approach.
 
-Over the years, it became apparent that having robust a compiler-embedded solution for any kind of distributed-memory architecture is not feasible. At the same time, desktop computers received multiprocessors, which posed a similar challenge but in a much more uniform setting~\cite{Harris05}. Therefore, the paper investigates the design space outlined by~\cite{Trinder96} in a different direction. 
+Over the years, it became apparent that having a robust  compiler-embedded solution for any kind of distributed-memory architecture is not feasible. At the same time, desktop computers received multiprocessors, which posed a similar challenge but in a much more uniform setting. The spread of desktop multiprocessors, therefore, pushed the exploration of the design space outlined by~\cite{Trinder96} in a different direction~\cite{Harris05}. 
 
-Switching from a cluster to a multicore processor means, for one, the absence of message-passing middleware that played crucial role in many management tasks. Consider thunk distribution. In a message-passing system, an idle processor could simply send messages requesting more job, at random. This ``pull'' model proved to be robust. On the other hand, on a multiprocessor without messaging infrastructure, an early solution to the problem of thunk distribution implemented a more expensive ``push'' model: when a busy PE pause executing a thread, it tries to find an idle PE to hand it in a free spark if it has any. Obviously, this puts additional burden on a wrong actor: the busy one, instead of the idle one. The idea to use a work-stealing queue data structure switched the responsibility, allowing an idle PE to search for a new job~\cite{Marlow09}. The data structure requires very modest synchronization and achieves notable speedups. 
+Switching from a cluster to a multicore processor means, for one, the absence of message-passing middleware that played crucial role in many management tasks. Consider thunk distribution. In a message-passing system, an idle processor could simply send messages requesting more job, at random. This ``pull'' model proved to be robust. On the other hand, on a multiprocessor without messaging infrastructure, an early solution to the problem of thunk distribution implemented a more expensive ``push'' model: when a busy PE pauses executing a thread, it tries to find an idle PE to hand it in a free spark if it has any. Obviously, this puts additional burden on a wrong actor: the busy one, instead of the idle one. The idea to use a work-stealing queue data structure switched the responsibility, allowing an idle PE to search for a new job~\cite{Marlow09}. The data structure requires very modest synchronization and achieves notable speedups. 
 
-\section{Parallel Thunk Evaluation}
+\section{Parallel Thunk Evaluation}\label{sec:thunk-eval}
 
-Recall from Section~\ref{sec:model} the concept of a spark that provides a scheduling scheme~\cite{Trinder96} for thunks.
-We consider a thunk as a dynamic data structure representing a pure functional term. Evaluating such structures should not have side effects visible in the program, but the data structure itself is updated during evaluation, namely, the computed value replaces the code used to compute this value.
+Recall from Section~\ref{sec:model} the concept of a spark queue that provides a scheduling scheme~\cite{Trinder96} for thunks.
+We consider a thunk as a dynamic data structure representing a pure functional term. Evaluating such a structure should not have side effects visible in the program, but the data structure itself is updated during evaluation: the computed value replaces the code used to compute this value.
 
-A notable challenge arising from the scheduling scheme~\cite{Trinder96} is that one thunk can be entered by different threads. The solution to this problem employs so called \emph{black holes}. The black hole is a special value assigned to a thunk by an entering thread. Any other thread trying to execute the same thunk while its blackholed blocks and attaches itself to the queue of threads waiting on this black hole. When the first thread finishes executing the thunk, it updates the value of the thunk and moves all waiting threads to the runnable queue managed by the current PE.
+A notable challenge arising from the scheduling scheme~\cite{Trinder96} is that one thunk can be entered by different threads. The solution to this problem employs so called \emph{black holes}. A black hole is a special value assigned to a thunk by an entering thread. Any other thread trying to execute the same thunk while it is blackholed blocks and attaches itself to the queue of threads waiting on this black hole. When the first thread finishes executing the thunk, it updates the value of the thunk and moves all waiting threads to the runnable queue managed by the current PE.
 
-The costs of fully synchronized evaluation of thunks described above become more significant when measured on a single multiprocessor. SMP processors became ubiquitous during the 2000s, so the blackholing approach to synchronization had to be reconsidered.
+The costs of fully synchronized evaluation of thunks described above become more significant when measured on a shared-memory multiprocessor. SMP processors became ubiquitous during the 2000s, so the blackholing approach to synchronization had to be revised.
 
 Consider precisely what happens if two threads start evaluating the same thunk. In the absence of side effects in the language, the result of both evaluations should be the same. The problem of synchronization still persists because both threads attempt to update the thunk with the (same) result of evaluation. Then, without additional arrangements, the threads would enter a race condition. Therefore, some amount of synchronization is needed even in the lock-free approach.
 
@@ -77,15 +73,35 @@ When we talk about an absence of side effects, we actually mean that compiler st
 
 \section{Memory Management}
 
-Memory management is based on PE-local GC-managed heaps. This approach facilitates local garbage collection and keeps its cost low. Some memory address bookkeeping is necessary to allow for thunks travelling between PEs. In a nutshell, every object can have two kinds of addresses, a local and a global one. A local address is only visible to the PE holding the object. A global address is used by other PEs to look up the object. A global address consists of a name of the owning PE and a local identifier. Note that for local garbage collection to be transparent from the outside, local identifier should not be exactly the local address because the latter may change after GC. Instead, there is a PE-local table mapping local identifiers to local addresses. Also, to track which local objects have been globalized, and to cache objects, some additional tables are built. Finally, moving individual objects between nodes is vastly inefficient. Therefore, the runtime tries to pack reasonably many ``nearby'' objects to the one in move.
+Efficient memory management is crucial for higher-order functional programming languages, such as Haskell, due to high volume of closure (including thunk) allocations even in simple programs. Most of functional languages, therefore, employ garbage collection as a primary tool to keep a memory usage in limits.
 
-\section{Measurements}
+Numerous approaches to garbage collection are found in the literature. The choice of a particular algorithm has to be made according to many considerations, most importantly, target architecture. 
 
-The initial work on parallel lazy functional programming~\cite{Trinder96}, put a limited effort into benchmarking the implementation, taking divide-and-conquer factorial algorithm as its case study. The evaluation section in~\cite{Harris05} is more substantial: it reports on positive results when experimenting with the sequential \texttt{nofib} test suite and parallel GHC driver.
+In a message-passing system, memory management could be based on PE-local GC-managed heaps~\cite{Trinder96}. This approach facilitates local garbage collection and keeps its cost low. 
+
+To allow free transport of thunks between distributed PEs, significant bookkeeping of memory addresses is necessary. Sufficiently flexible addressing scheme also supports fully independent garbage-collection in local heaps. In a nutshell, every object can have two kinds of addresses, a local and a global one. A local address is only visible to the PE holding the object. A global address is used by other PEs to look up the object. A global address consists of a name of the owning PE and a local identifier. Note that for local garbage collection to be transparent from the outside, local identifier should not be exactly the local address because the latter may change after GC. Instead, there is a PE-local table mapping local identifiers to local addresses. Also, to track which local objects have been globalized, and to cache objects, some additional tables are built. Finally, moving individual objects between nodes is vastly inefficient. Therefore, the runtime tries to pack reasonably many ``nearby'' objects to the one in move.
+
+On the contrary, multiprocessor architectures so far received more rigid stop-the-world style of garbage collection implementations~\cite{Marlow09}. Stopping the world means that all PEs should agree on the moment when they pause mutating the program term and allow for safe garbage collection. This kind of synchronization can be expensive and tricky to implement. One option for implementation is simple timer-based preemption that prescribes the conservative GC algorithm. The developers of GHC, however, considered this option inefficient. The other option to signal PE that the time for GC has come is to use heap-limit register zapping. To nullify the register, the initiating PE should have an access to the register file of other PE. It is a reasonable requirement for register-poor architectures, but might be an issue on register-rich ones.
+
+When all PEs on a multiprocessor are ready to do GC, it remains to decide whether it is reasonable to do the job cooperatively, in parallel, or simply let one PE to rule the heap. Most GC periods are short, and synchronization costs in parallel GC can easily outweigh its benefits. The viability of parallel GC is even more questionable if the program only employs one PE. Under this scenario in a typical multicore system, the runtime will have to setup new OS threads which is expensive.
+
+\section{Evaluations}
+
+If a language implementation targets industrial applications, it should undergo massive performance measurements. Three approaches to benchmarking has been identified: first, sequential programs that run fast on a sequential implementation must still run fast on a parallel one; second, sequential programs that can make use of several capabilities must benefit from them; third, inherently parallel algorithms must have ``reasonable'' performance. Note that testing second and third cases usually requires significant effort in making sequential programs parallel or creating new parallel programs. Additional work is needed to determine the behavior of an implementation when run on different architectures — we get back to this issue in the end of the section.
+
+The initial work about parallel lazy functional programming~\cite{Trinder96} put a limited effort into benchmarking the implementation, taking divide-and-conquer factorial algorithm as its case study. The example is about 30 lines long and cannot represent real-world programs. The whole experiment was aimed to show that a speedup is actually possible when running a parallel functional program on a distributed system.
+
+The evaluation section in~\cite{Harris05} is more substantial: it reports on positive results after the application of the lock-free thunk evaluation algorithm (Section~\ref{sec:thunk-eval}) when experimenting with the sequential \texttt{nofib} test suite and parallel GHC driver.
+
+An entirely new set of parallel benchmarks inside the \texttt{nofib} test suite was presented in~\cite{Marlow09}. The programs range from small (tens of lines), like Fibonacci number calculator, to medium (several hundreds of lines), such as matrix multiplication algorithm and Mandelbrot set builder, and the measurements support authors' claims.
+
+The works differ greatly in the diversity of parallel hardware employed in measurements. In~\cite{Trinder96}, both, a Sun multiprocessor and a distributed network of Sun computers, were used. First attempt to suit the needs of desktop users~\cite{Harris05} tried only one modest 2-core Intel processor and did not study scalability of the solution to more involved architectures. Finally, an extensive set of measurements was done simultaneously on 4-core and 8-core hi-end Intel Xeon processors \cite{Marlow09}, which allowed to estimate scalability of the proposed improvements.
 
 \section{Conclusion}
 
+Functional programming languages support high-level abstractions but are hard to implement efficiently. One promising approach to boost performance is parallel execution. Several prior works have considered using parallel hardware to implement lazy functional programming languages. An efficient implementation that does not affect performance of inherently sequential programs and scales well on massively parallel architectures is hard to build. Using several insights in thunk distribution, concurrent thunk evaluation and parallel garbage collection, this proves to be viable.
 
+\small
 \nocite{*}
 \bibliographystyle{unsrt}
 \bibliography{references}
